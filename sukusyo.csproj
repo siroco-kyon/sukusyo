@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>Sukusyo</RootNamespace>
+    <AssemblyName>sukusyo</AssemblyName>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+</Project>
