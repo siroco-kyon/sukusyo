@@ -3,10 +3,14 @@ using System.Windows.Forms;
 
 namespace Sukusyo;
 
+internal sealed class HotKeyEventArgs(int id) : EventArgs
+{
+    public int Id { get; } = id;
+}
+
 internal sealed class HotKeyWindow : NativeWindow, IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
-    private const int HOTKEY_ID = 0xB001;
 
     [Flags]
     public enum Modifiers : uint
@@ -25,42 +29,46 @@ internal sealed class HotKeyWindow : NativeWindow, IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-    public event EventHandler? HotKeyPressed;
+    public event EventHandler<HotKeyEventArgs>? HotKeyPressed;
 
-    private bool _registered;
+    private readonly HashSet<int> _registeredIds = [];
 
     public HotKeyWindow()
     {
         CreateHandle(new CreateParams());
     }
 
-    public bool Register(Modifiers modifiers, Keys key)
+    public bool Register(int id, Modifiers modifiers, Keys key)
     {
-        if (_registered)
+        if (_registeredIds.Contains(id))
         {
-            UnregisterHotKey(Handle, HOTKEY_ID);
-            _registered = false;
+            UnregisterHotKey(Handle, id);
+            _registeredIds.Remove(id);
         }
-        _registered = RegisterHotKey(Handle, HOTKEY_ID, (uint)(modifiers | Modifiers.NoRepeat), (uint)key);
-        return _registered;
+        bool ok = RegisterHotKey(Handle, id, (uint)(modifiers | Modifiers.NoRepeat), (uint)key);
+        if (ok)
+        {
+            _registeredIds.Add(id);
+        }
+        return ok;
     }
 
     protected override void WndProc(ref Message m)
     {
-        if (m.Msg == WM_HOTKEY && (int)m.WParam == HOTKEY_ID)
+        if (m.Msg == WM_HOTKEY && _registeredIds.Contains((int)m.WParam))
         {
-            HotKeyPressed?.Invoke(this, EventArgs.Empty);
+            HotKeyPressed?.Invoke(this, new HotKeyEventArgs((int)m.WParam));
         }
         base.WndProc(ref m);
     }
 
     public void Dispose()
     {
-        if (_registered)
+        foreach (var id in _registeredIds)
         {
-            UnregisterHotKey(Handle, HOTKEY_ID);
-            _registered = false;
+            UnregisterHotKey(Handle, id);
         }
+        _registeredIds.Clear();
         if (Handle != IntPtr.Zero)
         {
             DestroyHandle();

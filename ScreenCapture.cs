@@ -30,4 +30,15 @@ internal static class ScreenCapture
     {
         Clipboard.SetImage(bmp);
     }
+
+    public static void Save(Bitmap bmp, string path)
+    {
+        var format = Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".jpg" or ".jpeg" => ImageFormat.Jpeg,
+            ".bmp" => ImageFormat.Bmp,
+            _ => ImageFormat.Png,
+        };
+        bmp.Save(path, format);
+    }
 }
