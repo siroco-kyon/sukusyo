@@ -29,6 +29,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _tray.DoubleClick += (_, _) => StartClipboardCapture();
 
         _mainForm = new MainForm(icon, StartClipboardCapture, StartPinCapture, BringAllPinsToFront, CloseAllPins, ExitApp);
+        _mainForm.WindowState = FormWindowState.Minimized;
         _mainForm.Show();
 
         _hotKey = new HotKeyWindow();
