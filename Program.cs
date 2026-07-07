@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Windows.Forms;
 
 namespace Sukusyo;
@@ -7,13 +8,28 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        using var mutex = new System.Threading.Mutex(true, "Sukusyo.SingleInstance", out bool isNew);
-        if (!isNew)
+        Mutex mutex;
+        bool isNew;
+        try
         {
-            return;
+            mutex = new Mutex(true, "Sukusyo.SingleInstance", out isNew);
+        }
+        catch (AbandonedMutexException ex)
+        {
+            // a previous instance crashed while holding the lock; we now own it
+            mutex = (Mutex)ex.Mutex!;
+            isNew = true;
         }
 
-        ApplicationConfiguration.Initialize();
-        Application.Run(new TrayApplicationContext());
+        using (mutex)
+        {
+            if (!isNew)
+            {
+                return;
+            }
+
+            ApplicationConfiguration.Initialize();
+            Application.Run(new TrayApplicationContext());
+        }
     }
 }
