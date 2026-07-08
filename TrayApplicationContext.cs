@@ -1,6 +1,8 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using Microsoft.WindowsAPICodePack.Shell;
+using Microsoft.WindowsAPICodePack.Taskbar;
 
 namespace Sukusyo;
 
@@ -12,6 +14,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly HotKeyWindow _hotKey;
     private readonly MainForm _mainForm;
+    private readonly CommandRelay _commandRelay;
     private readonly List<PinnedWindow> _pinnedWindows = [];
     private bool _capturing;
 
@@ -41,6 +44,52 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         RegisterHotKeyOrWarn(HotKeyIdClipboard, Keys.A, "Ctrl+Shift+A");
         RegisterHotKeyOrWarn(HotKeyIdPin, Keys.P, "Ctrl+Shift+P");
+
+        _commandRelay = new CommandRelay();
+        _commandRelay.CommandReceived += (_, command) => Dispatch(command);
+
+        SetupJumpList();
+    }
+
+    private void Dispatch(RemoteCommand command)
+    {
+        switch (command)
+        {
+            case RemoteCommand.Clipboard: StartClipboardCapture(); break;
+            case RemoteCommand.Pin: StartPinCapture(); break;
+            case RemoteCommand.BringAllToFront: BringAllPinsToFront(); break;
+            case RemoteCommand.CloseAllPins: CloseAllPins(); break;
+            case RemoteCommand.Exit: ExitApp(); break;
+        }
+    }
+
+    private static void SetupJumpList()
+    {
+        var exePath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exePath))
+        {
+            return;
+        }
+
+        TaskbarManager.Instance.ApplicationId = "Sukusyo.App";
+
+        var jumpList = JumpList.CreateJumpList();
+        jumpList.AddUserTasks(
+            MakeJumpListTask(exePath, "範囲キャプチャ (Ctrl+Shift+A)", "--clipboard"),
+            MakeJumpListTask(exePath, "ピン留めキャプチャ (Ctrl+Shift+P)", "--pin"),
+            MakeJumpListTask(exePath, "すべてのピンを最前面へ", "--bring-front"),
+            MakeJumpListTask(exePath, "すべてのピンを閉じる", "--close-pins"),
+            MakeJumpListTask(exePath, "終了", "--exit"));
+        jumpList.Refresh();
+    }
+
+    private static JumpListLink MakeJumpListTask(string exePath, string title, string argument)
+    {
+        return new JumpListLink(exePath, title)
+        {
+            Arguments = argument,
+            IconReference = new IconReference(exePath, 0),
+        };
     }
 
     private void RegisterHotKeyOrWarn(int id, Keys key, string label)
@@ -204,6 +253,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _tray.Visible = false;
         _tray.Dispose();
         _hotKey.Dispose();
+        _commandRelay.Dispose();
         ExitThread();
     }
 
@@ -215,6 +265,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _mainForm.Dispose();
             _tray.Dispose();
             _hotKey.Dispose();
+            _commandRelay.Dispose();
         }
         base.Dispose(disposing);
     }
