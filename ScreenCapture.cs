@@ -1,21 +1,11 @@
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace Sukusyo;
 
 internal static class ScreenCapture
 {
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetDesktopWindow();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindowDC(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
     public static Bitmap CaptureRegion(Rectangle regionInVirtualPixels)
     {
         var bmp = new Bitmap(regionInVirtualPixels.Width, regionInVirtualPixels.Height, PixelFormat.Format32bppArgb);
@@ -26,9 +16,27 @@ internal static class ScreenCapture
         return bmp;
     }
 
+    public static Bitmap CaptureVirtualScreen()
+    {
+        return CaptureRegion(SystemInformation.VirtualScreen);
+    }
+
     public static void CopyToClipboard(Bitmap bmp)
     {
-        Clipboard.SetImage(bmp);
+        // The clipboard is briefly locked surprisingly often by Office and remote
+        // desktop software. A short retry keeps the capture gesture dependable.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                Clipboard.SetImage(bmp);
+                return;
+            }
+            catch (System.Runtime.InteropServices.ExternalException) when (attempt < 4)
+            {
+                Thread.Sleep(40 * (attempt + 1));
+            }
+        }
     }
 
     public static void Save(Bitmap bmp, string path)

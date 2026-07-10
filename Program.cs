@@ -31,11 +31,17 @@ internal static class Program
                 {
                     CommandRelay.Broadcast(command);
                 }
+                else
+                {
+                    // Launching the shortcut again should feel like Rapture:
+                    // immediately start another pin capture in the resident instance.
+                    CommandRelay.Broadcast(RemoteCommand.Pin);
+                }
                 return;
             }
 
             ApplicationConfiguration.Initialize();
-            Application.Run(new TrayApplicationContext());
+            Application.Run(new TrayApplicationContext(args));
         }
     }
 }

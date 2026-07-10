@@ -9,10 +9,12 @@ internal sealed class MainForm : Form
 
     public MainForm(
         Icon icon,
-        Action onClipboardCapture,
         Action onPinCapture,
+        Action onClipboardCapture,
+        Action onOpenImage,
         Action onBringAllPinsToFront,
         Action onCloseAllPins,
+        Action onSettings,
         Action onExit)
     {
         Text = "sukusyo";
@@ -22,33 +24,34 @@ internal sealed class MainForm : Form
         MinimizeBox = true;
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(300, 246);
+        ClientSize = new Size(340, 360);
         Padding = new Padding(16);
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 8,
         };
-        for (var i = 0; i < layout.RowCount; i++)
+        for (var index = 0; index < layout.RowCount; index++)
         {
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / layout.RowCount));
         }
 
-        layout.Controls.Add(CreateButton("範囲キャプチャ (Ctrl+Shift+A)", (_, _) => onClipboardCapture()));
         layout.Controls.Add(CreateButton("ピン留めキャプチャ (Ctrl+Shift+P)", (_, _) => onPinCapture()));
+        layout.Controls.Add(CreateButton("範囲キャプチャ (Ctrl+Shift+A)", (_, _) => onClipboardCapture()));
+        layout.Controls.Add(CreateButton("画像を開く...", (_, _) => onOpenImage()));
         layout.Controls.Add(CreateButton("すべてのピンを最前面へ", (_, _) => onBringAllPinsToFront()));
         layout.Controls.Add(CreateButton("すべてのピンを閉じる", (_, _) => onCloseAllPins()));
+        layout.Controls.Add(CreateButton("設定...", (_, _) => onSettings()));
+        layout.Controls.Add(CreateButton("最小化して常駐", (_, _) => Hide()));
         layout.Controls.Add(CreateButton("終了", (_, _) => onExit()));
 
         Controls.Add(layout);
-
         FormClosing += (_, e) =>
         {
             if (!_allowClose && e.CloseReason == CloseReason.UserClosing)
             {
-                // keep running in the tray instead of exiting when the user clicks X
                 e.Cancel = true;
                 Hide();
             }
