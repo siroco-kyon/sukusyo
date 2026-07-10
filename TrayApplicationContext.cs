@@ -15,31 +15,49 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly HotKeyWindow _hotKey;
     private readonly MainForm _mainForm;
     private readonly CommandRelay _commandRelay;
+    private readonly AppSettings _settings;
     private readonly List<PinnedWindow> _pinnedWindows = [];
     private bool _capturing;
 
-    public TrayApplicationContext()
+    public TrayApplicationContext(string[] startupArguments)
     {
+        _settings = AppSettings.Load();
         var icon = BuildIcon();
 
         _tray = new NotifyIcon
         {
             Icon = icon,
-            Text = "sukusyo — Ctrl+Shift+A クリップボード / Ctrl+Shift+P ピン留め",
+            Text = "sukusyo — ダブルクリックでピン留めキャプチャー",
             Visible = true,
             ContextMenuStrip = BuildMenu(),
         };
-        _tray.DoubleClick += (_, _) => StartClipboardCapture();
+        _tray.DoubleClick += (_, _) => StartPinCapture();
 
-        _mainForm = new MainForm(icon, StartClipboardCapture, StartPinCapture, BringAllPinsToFront, CloseAllPins, ExitApp);
-        _mainForm.WindowState = FormWindowState.Minimized;
+        _mainForm = new MainForm(
+            icon,
+            StartPinCapture,
+            StartClipboardCapture,
+            OpenImage,
+            BringAllPinsToFront,
+            CloseAllPins,
+            ShowSettings,
+            ExitApp)
+        {
+            WindowState = FormWindowState.Minimized,
+        };
         _mainForm.Show();
 
         _hotKey = new HotKeyWindow();
         _hotKey.HotKeyPressed += (_, e) =>
         {
-            if (e.Id == HotKeyIdClipboard) StartClipboardCapture();
-            else if (e.Id == HotKeyIdPin) StartPinCapture();
+            if (e.Id == HotKeyIdClipboard)
+            {
+                StartClipboardCapture();
+            }
+            else if (e.Id == HotKeyIdPin)
+            {
+                StartPinCapture();
+            }
         };
 
         RegisterHotKeyOrWarn(HotKeyIdClipboard, Keys.A, "Ctrl+Shift+A");
@@ -49,6 +67,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _commandRelay.CommandReceived += (_, command) => Dispatch(command);
 
         SetupJumpList();
+
+        var initialCommand = RemoteCommand.Pin;
+        if (startupArguments.Length > 0 && CommandRelay.TryParseArgument(startupArguments[0], out var parsed))
+        {
+            initialCommand = parsed;
+        }
+
+        // Wait until the message loop is active, then enter capture immediately.
+        _mainForm.BeginInvoke(() => Dispatch(initialCommand));
     }
 
     private void Dispatch(RemoteCommand command)
@@ -57,6 +84,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             case RemoteCommand.Clipboard: StartClipboardCapture(); break;
             case RemoteCommand.Pin: StartPinCapture(); break;
+            case RemoteCommand.OpenImage: OpenImage(); break;
+            case RemoteCommand.Settings: ShowSettings(); break;
             case RemoteCommand.BringAllToFront: BringAllPinsToFront(); break;
             case RemoteCommand.CloseAllPins: CloseAllPins(); break;
             case RemoteCommand.Exit: ExitApp(); break;
@@ -72,11 +101,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         TaskbarManager.Instance.ApplicationId = "Sukusyo.App";
-
         var jumpList = JumpList.CreateJumpList();
         jumpList.AddUserTasks(
-            MakeJumpListTask(exePath, "範囲キャプチャ (Ctrl+Shift+A)", "--clipboard"),
             MakeJumpListTask(exePath, "ピン留めキャプチャ (Ctrl+Shift+P)", "--pin"),
+            MakeJumpListTask(exePath, "範囲キャプチャ (Ctrl+Shift+A)", "--clipboard"),
+            MakeJumpListTask(exePath, "画像を開く", "--open"),
+            MakeJumpListTask(exePath, "設定", "--settings"),
             MakeJumpListTask(exePath, "すべてのピンを最前面へ", "--bring-front"),
             MakeJumpListTask(exePath, "すべてのピンを閉じる", "--close-pins"),
             MakeJumpListTask(exePath, "終了", "--exit"));
@@ -94,26 +124,30 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void RegisterHotKeyOrWarn(int id, Keys key, string label)
     {
-        if (!_hotKey.Register(id, HotKeyWindow.Modifiers.Control | HotKeyWindow.Modifiers.Shift, key))
+        if (_hotKey.Register(id, HotKeyWindow.Modifiers.Control | HotKeyWindow.Modifiers.Shift, key))
         {
-            MessageBox.Show(
-                $"ホットキー {label} を登録できませんでした。他のアプリが使用している可能性があります。",
-                "sukusyo",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            return;
         }
+
+        MessageBox.Show(
+            $"ホットキー {label} を登録できませんでした。ほかのアプリが使用している可能性があります。",
+            "sukusyo",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
     }
 
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("ウィンドウを開く", null, (_, _) => _mainForm.ShowAndActivate());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("範囲キャプチャ (Ctrl+Shift+A)", null, (_, _) => StartClipboardCapture());
         menu.Items.Add("ピン留めキャプチャ (Ctrl+Shift+P)", null, (_, _) => StartPinCapture());
+        menu.Items.Add("範囲キャプチャ (Ctrl+Shift+A)", null, (_, _) => StartClipboardCapture());
+        menu.Items.Add("画像を開く...", null, (_, _) => OpenImage());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("すべてのピンを最前面へ", null, (_, _) => BringAllPinsToFront());
         menu.Items.Add("すべてのピンを閉じる", null, (_, _) => CloseAllPins());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("設定...", null, (_, _) => ShowSettings());
+        menu.Items.Add("操作パネルを開く", null, (_, _) => _mainForm.ShowAndActivate());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("終了", null, (_, _) => ExitApp());
         return menu;
@@ -122,107 +156,116 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private static Icon BuildIcon()
     {
         const int size = 64;
-        using var bmp = new Bitmap(size, size);
-        using (var g = Graphics.FromImage(bmp))
+        using var bitmap = new Bitmap(size, size);
+        using (var graphics = Graphics.FromImage(bitmap))
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.Clear(Color.Transparent);
 
-            // rounded-square gradient background
-            float pad = size * 0.06f;
-            var rect = new RectangleF(pad, pad, size - pad * 2, size - pad * 2);
-            using var bgPath = RoundedRect(rect, size * 0.22f);
+            var padding = size * 0.06f;
+            var rectangle = new RectangleF(padding, padding, size - padding * 2, size - padding * 2);
+            using var backgroundPath = RoundedRect(rectangle, size * 0.22f);
             using var gradient = new LinearGradientBrush(
-                rect,
-                Color.FromArgb(255, 64, 132, 255),
-                Color.FromArgb(255, 130, 90, 255),
+                rectangle,
+                Color.FromArgb(64, 132, 255),
+                Color.FromArgb(130, 90, 255),
                 45f);
-            g.FillPath(gradient, bgPath);
+            graphics.FillPath(gradient, backgroundPath);
 
-            // viewfinder corner brackets, suggesting a region capture
-            float inset = size * 0.24f;
-            float arm = size * 0.16f;
-            float x0 = inset, y0 = inset, x1 = size - inset, y1 = size - inset;
-            using var pen = new Pen(Color.White, size * 0.075f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            g.DrawLines(pen, [new PointF(x0, y0 + arm), new PointF(x0, y0), new PointF(x0 + arm, y0)]);
-            g.DrawLines(pen, [new PointF(x1 - arm, y0), new PointF(x1, y0), new PointF(x1, y0 + arm)]);
-            g.DrawLines(pen, [new PointF(x0, y1 - arm), new PointF(x0, y1), new PointF(x0 + arm, y1)]);
-            g.DrawLines(pen, [new PointF(x1 - arm, y1), new PointF(x1, y1), new PointF(x1, y1 - arm)]);
+            var inset = size * 0.24f;
+            var arm = size * 0.16f;
+            var x0 = inset;
+            var y0 = inset;
+            var x1 = size - inset;
+            var y1 = size - inset;
+            using var pen = new Pen(Color.White, size * 0.075f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+            };
+            graphics.DrawLines(pen, [new PointF(x0, y0 + arm), new PointF(x0, y0), new PointF(x0 + arm, y0)]);
+            graphics.DrawLines(pen, [new PointF(x1 - arm, y0), new PointF(x1, y0), new PointF(x1, y0 + arm)]);
+            graphics.DrawLines(pen, [new PointF(x0, y1 - arm), new PointF(x0, y1), new PointF(x0 + arm, y1)]);
+            graphics.DrawLines(pen, [new PointF(x1 - arm, y1), new PointF(x1, y1), new PointF(x1, y1 - arm)]);
 
-            // small pin accent, representing the pin-to-screen feature
-            float dotR = size * 0.11f;
-            var dotCenter = new PointF(size * 0.76f, size * 0.76f);
-            using var dotBrush = new SolidBrush(Color.FromArgb(255, 255, 196, 61));
-            g.FillEllipse(dotBrush, dotCenter.X - dotR, dotCenter.Y - dotR, dotR * 2, dotR * 2);
+            var radius = size * 0.11f;
+            var center = new PointF(size * 0.76f, size * 0.76f);
+            using var dotBrush = new SolidBrush(Color.FromArgb(255, 196, 61));
             using var dotPen = new Pen(Color.White, size * 0.035f);
-            g.DrawEllipse(dotPen, dotCenter.X - dotR, dotCenter.Y - dotR, dotR * 2, dotR * 2);
+            graphics.FillEllipse(dotBrush, center.X - radius, center.Y - radius, radius * 2, radius * 2);
+            graphics.DrawEllipse(dotPen, center.X - radius, center.Y - radius, radius * 2, radius * 2);
         }
-        return Icon.FromHandle(bmp.GetHicon());
+        return Icon.FromHandle(bitmap.GetHicon());
     }
 
-    private static GraphicsPath RoundedRect(RectangleF rect, float radius)
+    private static GraphicsPath RoundedRect(RectangleF rectangle, float radius)
     {
-        float d = radius * 2;
+        var diameter = radius * 2;
         var path = new GraphicsPath();
-        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
-        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
-        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
-        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
         path.CloseFigure();
         return path;
     }
 
     private void StartClipboardCapture()
     {
-        if (_capturing) return;
-        _capturing = true;
-        try
-        {
-            using var overlay = new OverlayForm();
-            var result = overlay.ShowDialog();
-            if (result != DialogResult.OK || overlay.SelectedRegion is not { } region) return;
-
-            using var bmp = ScreenCapture.CaptureRegion(region);
-            ScreenCapture.CopyToClipboard(bmp);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"キャプチャに失敗しました: {ex.Message}", "sukusyo", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            _capturing = false;
-        }
+        RunCapture(pinResult: false);
     }
 
     private void StartPinCapture()
     {
-        if (_capturing) return;
+        RunCapture(pinResult: true);
+    }
+
+    private void RunCapture(bool pinResult)
+    {
+        if (_capturing)
+        {
+            return;
+        }
+
         _capturing = true;
         try
         {
             using var overlay = new OverlayForm();
             var result = overlay.ShowDialog();
-            if (result != DialogResult.OK || overlay.SelectedRegion is not { } region) return;
+            if (result != DialogResult.OK || overlay.SelectedRegion is not { } region)
+            {
+                return;
+            }
 
-            var bmp = ScreenCapture.CaptureRegion(region);
-            PinnedWindow pin;
+            var bitmap = ScreenCapture.CaptureRegion(region);
+            if (!pinResult)
+            {
+                using (bitmap)
+                {
+                    ScreenCapture.CopyToClipboard(bitmap);
+                    TryAutoSave(bitmap, overlay.SelectedWindowTitle);
+                }
+                return;
+            }
+
             try
             {
-                pin = new PinnedWindow(bmp, region.Location);
+                if (_settings.AutoCopy)
+                {
+                    ScreenCapture.CopyToClipboard(bitmap);
+                }
+                TryAutoSave(bitmap, overlay.SelectedWindowTitle);
+                AddPinnedWindow(new PinnedWindow(bitmap, region.Location, _settings, overlay.SelectedWindowTitle));
             }
             catch
             {
-                bmp.Dispose();
+                bitmap.Dispose();
                 throw;
             }
-            pin.FormClosed += (_, _) => _pinnedWindows.Remove(pin);
-            pin.Show();
-            _pinnedWindows.Add(pin);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"キャプチャに失敗しました: {ex.Message}", "sukusyo", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"キャプチャーに失敗しました: {ex.Message}", "sukusyo", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -230,11 +273,73 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private void TryAutoSave(Bitmap bitmap, string? title)
+    {
+        if (!_settings.AutoSave)
+        {
+            return;
+        }
+
+        try
+        {
+            ScreenCapture.Save(bitmap, _settings.CreateAutoSavePath(title));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"自動保存に失敗しました: {ex.Message}", "sukusyo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenImage()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Filter = "画像ファイル|*.png;*.jpg;*.jpeg;*.bmp;*.gif|すべてのファイル|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog(_mainForm) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            using var image = Image.FromFile(dialog.FileName);
+            var bitmap = ImageOperations.Clone(image);
+            var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
+            var location = new Point(
+                screen.Left + Math.Max(0, (screen.Width - bitmap.Width) / 2),
+                screen.Top + Math.Max(0, (screen.Height - bitmap.Height) / 2));
+            AddPinnedWindow(new PinnedWindow(bitmap, location, _settings, Path.GetFileName(dialog.FileName)));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"画像を開けませんでした: {ex.Message}", "sukusyo", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void AddPinnedWindow(PinnedWindow pin)
+    {
+        pin.FormClosed += (_, _) => _pinnedWindows.Remove(pin);
+        pin.Show();
+        _pinnedWindows.Add(pin);
+    }
+
+    private void ShowSettings()
+    {
+        using var dialog = new SettingsDialog(_settings);
+        dialog.ShowDialog(_mainForm);
+    }
+
     private void BringAllPinsToFront()
     {
-        foreach (var pin in _pinnedWindows)
+        foreach (var pin in _pinnedWindows.ToArray())
         {
-            pin.PinToFront();
+            if (!pin.IsDisposed)
+            {
+                pin.PinToFront();
+            }
         }
     }
 

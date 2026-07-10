@@ -7,6 +7,8 @@ internal enum RemoteCommand
 {
     Clipboard,
     Pin,
+    OpenImage,
+    Settings,
     BringAllToFront,
     CloseAllPins,
     Exit,
@@ -41,6 +43,8 @@ internal sealed class CommandRelay : NativeWindow, IDisposable
         {
             case "--clipboard": command = RemoteCommand.Clipboard; return true;
             case "--pin": command = RemoteCommand.Pin; return true;
+            case "--open": command = RemoteCommand.OpenImage; return true;
+            case "--settings": command = RemoteCommand.Settings; return true;
             case "--bring-front": command = RemoteCommand.BringAllToFront; return true;
             case "--close-pins": command = RemoteCommand.CloseAllPins; return true;
             case "--exit": command = RemoteCommand.Exit; return true;
