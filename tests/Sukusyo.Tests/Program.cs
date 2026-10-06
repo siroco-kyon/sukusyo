@@ -1,4 +1,7 @@
 using System.Drawing;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using Sukusyo;
 
 var tests = new (string Name, Action Run)[]
@@ -12,6 +15,13 @@ var tests = new (string Name, Action Run)[]
     ("Vertical strip removal closes the gap", VerticalRemovalClosesGap),
     ("Rotation swaps dimensions", RotationSwapsDimensions),
     ("Joining images uses the expected canvas", JoiningUsesExpectedCanvas),
+    ("Redaction replaces pixels with opaque black and preserves the source", RedactionReplacesPixels),
+    ("Redaction clips to image bounds and rejects empty selections", RedactionHandlesBounds),
+    ("Pinned redaction supports undo, redo and PNG export", PinnedRedactionWorkflow),
+    ("Double-click does not hide a pin during drawing or selection", DoubleClickRespectsEditing),
+    ("Double-click does not hide a pin while Ctrl or Shift is held", DoubleClickRespectsModifiers),
+    ("Expired temporary hide waits for capture completion", TemporaryHideWaitsForCapture),
+    ("Capture completion preserves an unexpired temporary hide", CapturePreservesHideTimer),
 };
 
 var failures = new List<string>();
@@ -136,4 +146,168 @@ static void AssertEqual<T>(T expected, T actual, string label) where T : notnull
     {
         throw new InvalidOperationException($"{label}: expected {expected}, actual {actual}");
     }
+}
+
+static void RedactionReplacesPixels()
+{
+    using var source = CreateFixture();
+    source.SetPixel(2, 1, Color.FromArgb(50, 200, 100, 30));
+    var original = source.GetPixel(2, 1).ToArgb();
+    using var result = ImageOperations.Redact(source, new Rectangle(1, 1, 2, 2));
+    AssertEqual(source.Size, result.Size, "size");
+    for (var y = 0; y < source.Height; y++)
+    {
+        for (var x = 0; x < source.Width; x++)
+        {
+            var expected = x >= 1 && x < 3 && y >= 1 ? Color.Black.ToArgb() : source.GetPixel(x, y).ToArgb();
+            AssertEqual(expected, result.GetPixel(x, y).ToArgb(), $"pixel {x},{y}");
+        }
+    }
+    AssertEqual(original, source.GetPixel(2, 1).ToArgb(), "source unchanged");
+}
+
+static void RedactionHandlesBounds()
+{
+    using var source = CreateFixture();
+    using var result = ImageOperations.Redact(source, new Rectangle(-2, -2, 10, 10));
+    AssertEqual(Color.Black.ToArgb(), result.GetPixel(3, 2).ToArgb(), "bottom-right edge");
+    foreach (var selection in new[] { Rectangle.Empty, new Rectangle(10, 10, 2, 2) })
+    {
+        try
+        {
+            using var invalid = ImageOperations.Redact(source, selection);
+        }
+        catch (ArgumentException)
+        {
+            continue;
+        }
+        throw new InvalidOperationException("Empty redaction must be rejected.");
+    }
+}
+
+static void PinnedRedactionWorkflow() => RunSta(() =>
+{
+    using var pin = new PinnedWindow(CreateFixture(), Point.Empty, new AppSettings());
+    var picture = (PictureBox)pin.Controls[0].Controls[0];
+    var original = ((Bitmap)picture.Image!).GetPixel(2, 1).ToArgb();
+    typeof(PinnedWindow).GetField("_selection", BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(pin, new Rectangle(1, 1, 3, 2));
+    var edit = (ToolStripMenuItem)picture.ContextMenuStrip!.Items[1];
+    edit.DropDownItems.OfType<ToolStripMenuItem>().Single(item => item.Text == "選択範囲を黒塗りで伏せる").PerformClick();
+    AssertEqual(Color.Black.ToArgb(), ((Bitmap)picture.Image!).GetPixel(3, 2).ToArgb(), "redacted edge");
+    using var stream = new MemoryStream();
+    picture.Image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+    stream.Position = 0;
+    using var exported = new Bitmap(stream);
+    AssertEqual(Color.Black.ToArgb(), exported.GetPixel(2, 1).ToArgb(), "exported black pixel");
+    edit.DropDownItems.OfType<ToolStripMenuItem>().Single(item => item.Text == "元に戻す").PerformClick();
+    AssertEqual(original, ((Bitmap)picture.Image!).GetPixel(2, 1).ToArgb(), "undo");
+    edit.DropDownItems.OfType<ToolStripMenuItem>().Single(item => item.Text == "やり直し").PerformClick();
+    AssertEqual(Color.Black.ToArgb(), ((Bitmap)picture.Image!).GetPixel(2, 1).ToArgb(), "redo");
+    pin.Close();
+});
+
+static void RunSta(Action action)
+{
+    Exception? error = null;
+    var thread = new Thread(() =>
+    {
+        try { action(); }
+        catch (Exception ex) { error = ex; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (error is not null) throw new InvalidOperationException("STA test failed", error);
+}
+
+static void InvokePin(PinnedWindow pin, string method, params object?[] arguments) =>
+    typeof(PinnedWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(pin, arguments);
+
+static void DoubleClickRespectsEditing() => RunSta(() =>
+{
+    using var pin = new PinnedWindow(CreateFixture(), new Point(50, 50), new AppSettings { HideDurationMilliseconds = 10000 });
+    pin.Show();
+    var doubleClick = new MouseEventArgs(MouseButtons.Left, 2, 1, 1, 0);
+    foreach (var fieldName in new[] { "_drawing", "_selecting" })
+    {
+        var field = typeof(PinnedWindow).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)!;
+        field.SetValue(pin, true);
+        InvokePin(pin, "OnPictureDoubleClick", null, doubleClick);
+        AssertEqual(true, pin.Visible, $"visible during {fieldName}");
+        AssertEqual(true, (bool)field.GetValue(pin)!, $"editing continues during {fieldName}");
+        field.SetValue(pin, false);
+    }
+    InvokePin(pin, "OnPictureDoubleClick", null, doubleClick);
+    AssertEqual(false, pin.Visible, "ordinary double-click still hides");
+    pin.Close();
+});
+
+static void TemporaryHideWaitsForCapture() => RunSta(() =>
+{
+    using var pin = new PinnedWindow(CreateFixture(), new Point(50, 50), new AppSettings { HideDurationMilliseconds = 10000 });
+    pin.Show();
+    InvokePin(pin, "HideTemporarily");
+    pin.SetCaptureActive(true);
+    InvokePin(pin, "RevealAfterTemporaryHide");
+    AssertEqual(false, pin.Visible, "stays hidden after expiration during capture");
+    var timer = (System.Windows.Forms.Timer)typeof(PinnedWindow)
+        .GetField("_revealTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pin)!;
+    AssertEqual(false, timer.Enabled, "expired timer stops");
+    pin.SetCaptureActive(false);
+    AssertEqual(true, pin.Visible, "reveals after capture completes or is cancelled");
+    AssertEqual(true, pin.TopMost, "topmost restored");
+    pin.Close();
+});
+
+static void DoubleClickRespectsModifiers() => RunSta(() =>
+{
+    using var pin = new PinnedWindow(CreateFixture(), new Point(50, 50), new AppSettings { HideDurationMilliseconds = 10000 });
+    pin.Show();
+    var savedState = new byte[256];
+    if (!KeyboardState.GetKeyboardState(savedState)) throw new InvalidOperationException("Cannot read keyboard state.");
+    try
+    {
+        foreach (var key in new[] { Keys.ControlKey, Keys.ShiftKey })
+        {
+            var state = new byte[256];
+            state[(int)key] = 0x80;
+            if (!KeyboardState.SetKeyboardState(state)) throw new InvalidOperationException("Cannot set thread keyboard state.");
+            InvokePin(pin, "OnPictureDoubleClick", null, new MouseEventArgs(MouseButtons.Left, 2, 1, 1, 0));
+            AssertEqual(true, pin.Visible, $"visible with {key} held");
+        }
+    }
+    finally
+    {
+        KeyboardState.SetKeyboardState(savedState);
+        pin.Close();
+    }
+});
+
+static void CapturePreservesHideTimer() => RunSta(() =>
+{
+    using var pin = new PinnedWindow(CreateFixture(), new Point(50, 50), new AppSettings { HideDurationMilliseconds = 10000 });
+    pin.Show();
+    InvokePin(pin, "HideTemporarily");
+    pin.SetCaptureActive(true);
+    pin.SetCaptureActive(false);
+    AssertEqual(false, pin.Visible, "capture ending early does not reveal the pin");
+    var timer = (System.Windows.Forms.Timer)typeof(PinnedWindow)
+        .GetField("_revealTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pin)!;
+    AssertEqual(true, timer.Enabled, "original timer remains active");
+    InvokePin(pin, "RevealAfterTemporaryHide");
+    AssertEqual(true, pin.Visible, "reveals at original expiration");
+    pin.Close();
+});
+
+internal static class KeyboardState
+{
+    // These calls affect only this test thread's keyboard state, not physical input.
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetKeyboardState([Out] byte[] state);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetKeyboardState(byte[] state);
 }
