@@ -237,7 +237,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 return;
             }
 
-            var bitmap = ScreenCapture.CaptureRegion(region);
+            var bitmap = overlay.CreateSelectedBitmap();
             if (!pinResult)
             {
                 using (bitmap)

@@ -8,6 +8,7 @@ namespace Sukusyo;
 internal sealed class OverlayForm : Form
 {
     private readonly Bitmap _desktopSnapshot;
+    private readonly Rectangle _snapshotBounds;
     private Point _startPoint;
     private Point _currentPoint;
     private bool _isDragging;
@@ -20,7 +21,8 @@ internal sealed class OverlayForm : Form
 
     public OverlayForm()
     {
-        _desktopSnapshot = ScreenCapture.CaptureVirtualScreen();
+        _snapshotBounds = SystemInformation.VirtualScreen;
+        _desktopSnapshot = ScreenCapture.CaptureRegion(_snapshotBounds);
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -32,7 +34,7 @@ internal sealed class OverlayForm : Form
         KeyPreview = true;
         AutoScaleMode = AutoScaleMode.None;
 
-        Bounds = SystemInformation.VirtualScreen;
+        Bounds = _snapshotBounds;
 
         KeyDown += OnKeyDown;
         MouseDown += OnMouseDown;
@@ -128,8 +130,7 @@ internal sealed class OverlayForm : Form
 
     private void CompleteCapture(Rectangle region)
     {
-        var virtualScreen = SystemInformation.VirtualScreen;
-        region = Rectangle.Intersect(region, virtualScreen);
+        region = Rectangle.Intersect(region, _snapshotBounds);
         if (region.Width < 1 || region.Height < 1)
         {
             CancelCapture();
@@ -147,6 +148,19 @@ internal sealed class OverlayForm : Form
         SelectedWindowTitle = null;
         DialogResult = DialogResult.Cancel;
         Close();
+    }
+
+    public Bitmap CreateSelectedBitmap()
+    {
+        if (SelectedRegion is not { } region)
+        {
+            throw new InvalidOperationException("キャプチャー範囲が選択されていません。");
+        }
+
+        // Crop the same frozen pixels shown during selection. Capturing the live
+        // desktop here would include changes that happened after the hotkey.
+        // The caller owns this copy; it remains valid after the overlay is disposed.
+        return ScreenCapture.CropSnapshot(_desktopSnapshot, _snapshotBounds.Location, region);
     }
 
     private Rectangle GetSelectionRect()
