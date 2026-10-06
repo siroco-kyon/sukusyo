@@ -5,6 +5,9 @@ var tests = new (string Name, Action Run)[]
 {
     ("Clone preserves pixels", ClonePreservesPixels),
     ("Crop extracts the requested rectangle", CropExtractsRectangle),
+    ("Snapshot crop translates negative monitor coordinates", SnapshotCropTranslatesCoordinates),
+    ("Snapshot crop clips to the captured desktop", SnapshotCropClipsToDesktop),
+    ("Snapshot crop survives source changes and disposal", SnapshotCropOwnsPixels),
     ("Horizontal strip removal closes the gap", HorizontalRemovalClosesGap),
     ("Vertical strip removal closes the gap", VerticalRemovalClosesGap),
     ("Rotation swaps dimensions", RotationSwapsDimensions),
@@ -59,6 +62,39 @@ static void CropExtractsRectangle()
     using var result = ImageOperations.Crop(source, new Rectangle(1, 1, 2, 2));
     AssertEqual(new Size(2, 2), result.Size, "size");
     AssertEqual(source.GetPixel(1, 1).ToArgb(), result.GetPixel(0, 0).ToArgb(), "top-left pixel");
+}
+
+static void SnapshotCropTranslatesCoordinates()
+{
+    using var source = CreateFixture();
+    using var result = ScreenCapture.CropSnapshot(source, new Point(-1920, -1080), new Rectangle(-1919, -1079, 2, 2));
+    AssertEqual(new Size(2, 2), result.Size, "size");
+    AssertEqual(source.GetPixel(1, 1).ToArgb(), result.GetPixel(0, 0).ToArgb(), "top-left pixel");
+    AssertEqual(source.GetPixel(2, 2).ToArgb(), result.GetPixel(1, 1).ToArgb(), "bottom-right pixel");
+}
+
+static void SnapshotCropClipsToDesktop()
+{
+    using var source = CreateFixture();
+    using var result = ScreenCapture.CropSnapshot(source, new Point(-4, 0), new Rectangle(-5, -1, 3, 3));
+    AssertEqual(new Size(2, 2), result.Size, "clipped size");
+    AssertEqual(source.GetPixel(0, 0).ToArgb(), result.GetPixel(0, 0).ToArgb(), "top-left pixel");
+}
+
+static void SnapshotCropOwnsPixels()
+{
+    Bitmap result;
+    int originalPixel;
+    using (var source = CreateFixture())
+    {
+        originalPixel = source.GetPixel(1, 1).ToArgb();
+        result = ScreenCapture.CropSnapshot(source, Point.Empty, new Rectangle(1, 1, 2, 2));
+        source.SetPixel(1, 1, Color.Magenta);
+    }
+    using (result)
+    {
+        AssertEqual(originalPixel, result.GetPixel(0, 0).ToArgb(), "frozen pixel");
+    }
 }
 
 static void HorizontalRemovalClosesGap()

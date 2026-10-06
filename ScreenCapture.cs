@@ -21,6 +21,18 @@ internal static class ScreenCapture
         return CaptureRegion(SystemInformation.VirtualScreen);
     }
 
+    public static Bitmap CropSnapshot(Bitmap snapshot, Point snapshotOrigin, Rectangle regionInVirtualPixels)
+    {
+        // Virtual-screen coordinates may be negative on monitors left of or
+        // above the primary display. Convert them into snapshot pixel coordinates.
+        var selection = new Rectangle(
+            regionInVirtualPixels.X - snapshotOrigin.X,
+            regionInVirtualPixels.Y - snapshotOrigin.Y,
+            regionInVirtualPixels.Width,
+            regionInVirtualPixels.Height);
+        return ImageOperations.Crop(snapshot, selection);
+    }
+
     public static void CopyToClipboard(Bitmap bmp)
     {
         // The clipboard is briefly locked surprisingly often by Office and remote
