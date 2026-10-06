@@ -15,6 +15,7 @@ internal sealed class PinnedWindow : Form
     private readonly PictureBox _picture;
     private readonly ContextMenuStrip _menu;
     private readonly ToolStripMenuItem _alwaysOnTopItem;
+    private readonly ToolStripMenuItem _redactItem;
     private readonly ToolStripMenuItem _undoItem;
     private readonly ToolStripMenuItem _redoItem;
     private readonly ToolStripMenuItem _cropItem;
@@ -37,6 +38,8 @@ internal sealed class PinnedWindow : Form
     private bool _drawing;
     private bool _straightStroke;
     private bool _selecting;
+    private bool _captureActive;
+    private bool _revealPending;
     private Rectangle? _selection;
     private float _zoom = 1f;
     private int _opacityPercent;
@@ -90,6 +93,10 @@ internal sealed class PinnedWindow : Form
             Checked = settings.AlwaysOnTop,
         };
         _undoItem = new ToolStripMenuItem("元に戻す", null, (_, _) => Undo()) { ShortcutKeys = Keys.Control | Keys.Z };
+        _redactItem = new ToolStripMenuItem("選択範囲を黒塗りで伏せる", null, (_, _) => RedactSelection())
+        {
+            ShortcutKeys = Keys.Control | Keys.B,
+        };
         _redoItem = new ToolStripMenuItem("やり直し", null, (_, _) => Redo()) { ShortcutKeys = Keys.Control | Keys.Y };
         _cropItem = new ToolStripMenuItem("トリミング", null, (_, _) => CropSelection()) { ShortcutKeys = Keys.Control | Keys.T };
         _removeHorizontalItem = new ToolStripMenuItem("横ぶっこ抜き", null, (_, _) => RemoveHorizontal()) { ShortcutKeys = Keys.Control | Keys.R };
@@ -129,6 +136,7 @@ internal sealed class PinnedWindow : Form
         editMenu.DropDownItems.Add(new ToolStripSeparator());
         editMenu.DropDownItems.Add("テキストを挿入...", null, (_, _) => InsertText());
         editMenu.DropDownItems.Add(_cropItem);
+        editMenu.DropDownItems.Add(_redactItem);
         editMenu.DropDownItems.Add(_removeHorizontalItem);
         editMenu.DropDownItems.Add(_removeVerticalItem);
 
@@ -228,6 +236,7 @@ internal sealed class PinnedWindow : Form
         _redoItem.Enabled = _redoHistory.Count > 0;
         var hasSelection = _selection is { Width: > 0, Height: > 0 };
         _cropItem.Enabled = hasSelection;
+        _redactItem.Enabled = hasSelection;
         _removeHorizontalItem.Enabled = hasSelection;
         _removeVerticalItem.Enabled = hasSelection;
         UpdateMenuChecks();
@@ -326,7 +335,7 @@ internal sealed class PinnedWindow : Form
 
         if (_selecting)
         {
-            _selection = NormalizeRectangle(_selectionStart, ToImagePoint(e.Location));
+            _selection = NormalizeRectangle(_selectionStart, ToSelectionPoint(e.Location));
             _picture.Invalidate();
             return;
         }
@@ -365,7 +374,7 @@ internal sealed class PinnedWindow : Form
         }
         else if (_selecting)
         {
-            _selection = NormalizeRectangle(_selectionStart, ToImagePoint(e.Location));
+            _selection = NormalizeRectangle(_selectionStart, ToSelectionPoint(e.Location));
             if (_selection.Value.Width < 2 || _selection.Value.Height < 2)
             {
                 _selection = null;
@@ -380,7 +389,8 @@ internal sealed class PinnedWindow : Form
 
     private void OnPictureDoubleClick(object? sender, MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left)
+        if (e.Button == MouseButtons.Left && !_drawing && !_selecting &&
+            (Control.ModifierKeys & (Keys.Control | Keys.Shift)) == Keys.None)
         {
             EndPointerOperation();
             HideTemporarily();
@@ -459,6 +469,10 @@ internal sealed class PinnedWindow : Form
 
     private PointF ScalePoint(Point point) => new(point.X * _zoom, point.Y * _zoom);
 
+    private Point ToSelectionPoint(Point point) => _bitmap is null ? Point.Empty : new Point(
+        Math.Clamp((int)Math.Floor(point.X / _zoom), 0, _bitmap.Width),
+        Math.Clamp((int)Math.Floor(point.Y / _zoom), 0, _bitmap.Height));
+
     private Rectangle ScaleRectangle(Rectangle rectangle) => Rectangle.FromLTRB(
         (int)Math.Round(rectangle.Left * _zoom),
         (int)Math.Round(rectangle.Top * _zoom),
@@ -499,6 +513,10 @@ internal sealed class PinnedWindow : Form
         else if (e.Control && e.KeyCode == Keys.T)
         {
             CropSelection();
+        }
+        else if (e.Control && e.KeyCode == Keys.B)
+        {
+            RedactSelection();
         }
         else if (e.Control && e.KeyCode == Keys.R)
         {
@@ -599,6 +617,15 @@ internal sealed class PinnedWindow : Form
             return;
         }
         ApplyOperation(image => ImageOperations.Crop(image, selection));
+    }
+
+    private void RedactSelection()
+    {
+        if (_bitmap is null || _selection is not { Width: > 0, Height: > 0 } selection)
+        {
+            return;
+        }
+        ApplyOperation(image => ImageOperations.Redact(image, selection));
     }
 
     private void RemoveHorizontal()
@@ -792,6 +819,7 @@ internal sealed class PinnedWindow : Form
     private void HideTemporarily()
     {
         _revealTimer.Stop();
+        _revealPending = false;
         Hide();
         _revealTimer.Start();
     }
@@ -799,11 +827,26 @@ internal sealed class PinnedWindow : Form
     private void RevealAfterTemporaryHide()
     {
         _revealTimer.Stop();
+        if (_captureActive)
+        {
+            _revealPending = true;
+            return;
+        }
+        _revealPending = false;
         Show();
         if (_alwaysOnTopItem.Checked)
         {
             TopMost = false;
             TopMost = true;
+        }
+    }
+
+    public void SetCaptureActive(bool active)
+    {
+        _captureActive = active;
+        if (!active && _revealPending)
+        {
+            RevealAfterTemporaryHide();
         }
     }
 

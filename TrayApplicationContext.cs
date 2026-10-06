@@ -230,6 +230,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _capturing = true;
         try
         {
+            SetPinsCaptureActive(true);
             using var overlay = new OverlayForm();
             var result = overlay.ShowDialog();
             if (result != DialogResult.OK || overlay.SelectedRegion is not { } region)
@@ -270,6 +271,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
         finally
         {
             _capturing = false;
+            SetPinsCaptureActive(false);
+        }
+    }
+
+    private void SetPinsCaptureActive(bool active)
+    {
+        foreach (var pin in _pinnedWindows.ToArray())
+        {
+            if (!pin.IsDisposed)
+            {
+                pin.SetCaptureActive(active);
+            }
         }
     }
 

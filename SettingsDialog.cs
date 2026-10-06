@@ -28,21 +28,21 @@ internal sealed class SettingsDialog : Form
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(560, 355);
+        ClientSize = new Size(560, 419);
         Padding = new Padding(16);
 
         var table = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 8,
+            RowCount = 9,
         };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
         for (var index = 0; index < table.RowCount; index++)
         {
-            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            table.RowStyles.Add(new RowStyle(SizeType.Absolute, index == 8 ? 56 : 32));
         }
 
         _autoCopy = new CheckBox { Text = "キャプチャー後に自動コピー", Checked = settings.AutoCopy, AutoSize = true };
@@ -75,6 +75,16 @@ internal sealed class SettingsDialog : Form
         table.Controls.Add(_penWidth, 1, 6);
         table.Controls.Add(CreateLabel("蛍光ペンの色"), 0, 7);
         table.Controls.Add(_penColor, 1, 7);
+
+        var autoOutputNote = new Label
+        {
+            Text = "自動コピー・自動保存は、黒塗りなどの編集前の画像が対象です。\r\n共有するときは、編集後にコピー・保存してください。",
+            Dock = DockStyle.Fill,
+            Margin = new Padding(3, 8, 3, 0),
+            ForeColor = SystemColors.GrayText,
+        };
+        table.Controls.Add(autoOutputNote, 0, 8);
+        table.SetColumnSpan(autoOutputNote, 3);
 
         var buttons = new FlowLayoutPanel
         {

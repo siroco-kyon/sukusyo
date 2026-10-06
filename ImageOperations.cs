@@ -37,6 +37,22 @@ internal static class ImageOperations
         return result;
     }
 
+    public static Bitmap Redact(Bitmap source, Rectangle selection)
+    {
+        selection = Rectangle.Intersect(new Rectangle(Point.Empty, source.Size), selection);
+        if (selection.Width < 1 || selection.Height < 1)
+        {
+            throw new ArgumentException("伏せる範囲がありません。", nameof(selection));
+        }
+
+        var result = Clone(source);
+        using var graphics = Graphics.FromImage(result);
+        graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+        using var brush = new SolidBrush(Color.Black);
+        graphics.FillRectangle(brush, selection);
+        return result;
+    }
+
     public static Bitmap RemoveHorizontalStrip(Bitmap source, Rectangle selection)
     {
         selection = Rectangle.Intersect(new Rectangle(Point.Empty, source.Size), selection);
